@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Studio Audio Effects App</title>
+  <style>
+    body { font-family: Arial; padding: 20px; }
+    canvas { width: 100%; height: 100px; background: #111; display: block; margin: 10px 0; }
+    label { display: block; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>🎚️ Studio Audio Effects App</h1>
+
+  <input type="file" id="fileInput" accept="audio/*"><br><br>
+  <button id="playPause">Play</button>
+  <button id="toggleMic">🎤 Toggle Mic</button>
+
+  <label>Gain: <input type="range" id="gain" min="0" max="2" step="0.01" value="1"></label>
+  <label>Bass (low): <input type="range" id="bass" min="-30" max="30" step="1" value="0"></label>
+  <label>Mid: <input type="range" id="mid" min="-30" max="30" step="1" value="0"></label>
+  <label>Treble (high): <input type="range" id="treble" min="-30" max="30" step="1" value="0"></label>
+  <label>Delay: <input type="range" id="delay" min="0" max="1" step="0.01" value="0"></label>
+  <label>Reverb: <input type="checkbox" id="reverbToggle"></label>
+
+  <canvas id="visualizer" width="800" height="100"></canvas>
+
+  <script>
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    let source, micStream;
+    let isPlaying = false, isMic = false;
+
+    // Load elements
+    const fileInput = document.getElementById('fileInput');
+    const playPauseBtn = document.getElementById('playPause');
+    const toggleMicBtn = document.getElementById('toggleMic');
+    const visualizer = document.getElementById('visualizer');
+    const canvasCtx = visualizer.getContext('2d');
+
+    // Controls
+    const gainSlider = document.getElementById('gain');
+    const bassSlider = document.getElementById('bass');
+    const midSlider = document.getElementById('mid');
+    const trebleSlider = document.getElementById('treble');
+    const delaySlider = document.getElementById('delay');
+    const reverbToggle = document.getElementById('reverbToggle');
+
+    // Create nodes
+    const gainNode = ctx.createGain();
+    const bass = ctx.createBiquadFilter(); bass.type = "lowshelf"; bass.frequency.value = 500;
+    const mid = ctx.createBiquadFilter(); mid.type = "peaking"; mid.frequency.value = 1000;
+    const treble = ctx.createBiquadFilter(); treble.type = "highshelf"; treble.frequency.value = 3000;
+
+    const delayNode = ctx.createDelay(5.0);
+    const analyser = ctx.createAnalyser(); analyser.fftSize = 256;
+    const reverb = ctx.createConvolver();
+    loadReverbImpulse();
+
+    // Connect graph
+    function buildAudioGraph(inputNode) {
+      inputNode
+        .connect(gainNode)
+        .connect(bass)
+        .connect(mid)
+        .connect(treble)
+        .connect(delayNode)
+        .connect(reverb)
+        .connect(analyser)
+        .connect(ctx.destination);
+      delayNode.connect(analyser); // Also send dry signal to analyser
+    }
+
+    // File loading
+    fileInput.addEventListener('change', async (e) => {
+      if (isPlaying && source) source.stop();
+      const file = e.target.files[0];
+      const arrayBuffer = await file.arrayBuffer();
+      const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+
+      source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      buildAudioGraph(source);
+      source.start();
+      isPlaying = true;
+    });
+
+    // Mic toggle
+    toggleMicBtn.addEventListener('click', async () => {
+      if (isMic) {
+        micStream.getTracks().forEach(track => track.stop());
+        isMic = false;
+      } else {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micStream = ctx.createMediaStreamSource(stream);
+        buildAudioGraph(micStream);
+        isMic = true;
+      }
+    });
+
+    // Play/pause (file)
+    playPauseBtn.addEventListener('click', () => {
+      if (isPlaying) {
+        if (source) source.stop();
+        isPlaying = false;
+      } else if (fileInput.files[0]) {
+        fileInput.dispatchEvent(new Event('change')); // Trigger playback
+      }
+    });
+
+    // Control handlers
+    gainSlider.oninput = () => gainNode.gain.value = parseFloat(gainSlider.value);
+    bassSlider.oninput = () => bass.gain.value = parseFloat(bassSlider.value);
+    midSlider.oninput = () => mid.gain.value = parseFloat(midSlider.value);
+    trebleSlider.oninput = () => treble.gain.value = parseFloat(trebleSlider.value);
+    delaySlider.oninput = () => delayNode.delayTime.value = parseFloat(delaySlider.value);
+    reverbToggle.onchange = () => {
+      reverb.disconnect();
+      if (reverbToggle.checked) {
+        reverb.connect(analyser);
+      } else {
+        delayNode.connect(analyser);
+      }
+    };
+
+    // Reverb impulse (simple sine decay)
+    function loadReverbImpulse() {
+      const length = ctx.sampleRate * 3;
+      const impulse = ctx.createBuffer(2, length, ctx.sampleRate);
+      for (let ch = 0; ch < 2; ch++) {
+        let channel = impulse.getChannelData(ch);
+        for (let i = 0; i < length; i++) {
+          channel[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, 2);
+        }
+      }
+      reverb.buffer = impulse;
+    }
+
+    // Visualizer
+    function draw() {
+      requestAnimationFrame(draw);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(data);
+      canvasCtx.fillStyle = '#111';
+      canvasCtx.fillRect(0, 0, visualizer.width, visualizer.height);
+      data.forEach((v, i) => {
+        const x = i * 3;
+        const h = v / 255 * visualizer.height;
+        canvasCtx.fillStyle = 'lime';
+        canvasCtx.fillRect(x, visualizer.height - h, 2, h);
+      });
+    }
+    draw();
+  </script>
+</body>
+</html>
